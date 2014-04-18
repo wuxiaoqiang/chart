@@ -1,0 +1,10 @@
+root.level=error
+root.type=local
+root.path=/sdcard/test
+root.name=thunder.log
+root.max_num=20
+root.max_size=20971520
+
+module.cache=debug
+module.task=debug
+module.async_frame=debug
