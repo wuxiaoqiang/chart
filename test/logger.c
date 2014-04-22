@@ -19,6 +19,11 @@ static const char* g_level[] = {"debug","error"};
 
 #define MAX_MODULE_NUM 512
 
+struct log_buf_struct
+{
+	struct log_buf_struct* next;
+	char* buf;
+};
 enum log_type{LOG_TYPE_LOCAL, LOG_TYPE_NET};
 struct log_struct
 {
@@ -37,6 +42,14 @@ struct log_struct
 	int module_num;
 	char* modules[MAX_MODULE_NUM];
 	int levels[MAX_MODULE_NUM];
+
+
+	struct log_buf_struct* head;
+	struct log_buf_struct* tail;
+	uv_mutex_t lock;
+	// uint64_t wait_log_num;
+	int flushing;
+	int notify_close;
 };
 
 static struct log_struct g_log;
@@ -94,6 +107,11 @@ static uv_fs_t* malloc_req()
 static free_req(uv_fs_t* req)
 {
     free(req);
+}
+
+void on_connect(uv_connect_t* req, int status)
+{
+	_LOG_DEBUG("");
 }
 
 void log_init(char* cfg_path)
@@ -181,23 +199,113 @@ void log_init(char* cfg_path)
 		}
 		fclose(fp);
 	}
+	if(g_log.type == LOG_TYPE_LOCAL)
+	{	
+		rename_logs();
+		char path[1024] = {0};
+		join_path(g_log.path, g_log.name, path);
+		g_log.cur_file = open(path, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
+		LOG_DEBUG("");
+	}
+	else
+	{
+		uv_tcp_t socket;
+		uv_tcp_init(get_loop(), &socket);
 
-	rename_logs();
-	char path[1024] = {0};
-	join_path(g_log.path, g_log.name, path);
-	g_log.cur_file = open(path, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
-	LOG_DEBUG("");
+		uv_connect_t connect;
+
+		struct sockaddr_in dest = uv_ip4_addr("127.0.0.1", 80);
+
+		uv_tcp_connect(&connect, &socket, dest, on_connect);
+	}
+
+	uv_mutex_init(&g_log.lock);
+}
+
+void log_uninit_ex()
+{
+	close(g_log.cur_file);
+
+	int i;
+	for(i=0; i<g_log.module_num; ++i)
+	{
+		free(g_log.modules[i]);
+	}
+	uv_mutex_destroy(&g_log.lock);
+}
+
+static void write_callback(uv_fs_t* req);
+
+static void flush_log()
+{
+	uv_fs_t* req = malloc_req();
+    uv_buf_t uv_buf[1024] = {0};
+    int index = 0;
+	struct log_buf_struct* tmp;
+	
+	uv_mutex_lock(&g_log.lock);
+	req->data = g_log.head;
+    while(g_log.head!=NULL && index < 1024)
+    {
+    	uv_buf[index].base = g_log.head->buf;
+    	uv_buf[index].len = strlen(g_log.head->buf);
+    	++index;
+    	tmp = g_log.head;
+    	if(g_log.tail==g_log.head)
+    		g_log.tail = NULL;
+    	g_log.head = g_log.head->next;
+    	// --g_log.wait_log_num;
+    }
+    if(index)
+	    g_log.flushing = 1;
+	else
+		g_log.flushing = 0;
+	uv_mutex_unlock(&g_log.lock);
+
+	if(index)
+	{
+		tmp->next = NULL;
+	    uv_fs_write(get_loop(), req, g_log.cur_file, uv_buf, index, -1, write_callback);
+	}
+	else
+	{
+		free_req(req);
+		if(g_log.notify_close)
+			log_uninit_ex();
+	}
 }
 
 static void write_callback(uv_fs_t* req)
 {
     uv_fs_req_cleanup(req);
-    free_req(req);
-}
 
-static void on_new_log()
-{
-	
+    struct log_buf_struct* tmp = (struct log_buf_struct*)req->data;
+    struct log_buf_struct* pre = tmp;
+    while(tmp!=NULL)
+    {
+    	free(tmp->buf);
+    	pre = tmp;
+    	tmp = tmp->next;
+    	free(pre);
+    }
+    free_req(req);
+
+    uint64_t filesize = 0;
+    struct stat statbuff;
+    if(fstat(g_log.cur_file, &statbuff)>=0)
+    {
+    	filesize = statbuff.st_size;
+    }
+    if(filesize > g_log.max_size)
+    {
+    	close(g_log.cur_file);
+    	rename_logs();
+
+ 	    char new_log_name[1024] = {0};
+    	join_path(g_log.path, g_log.name, new_log_name);
+    	g_log.cur_file = open(new_log_name, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
+    }
+    flush_log();
 }
 
 static int log_this_module(const char* module, int level)
@@ -221,7 +329,7 @@ static int log_this_module(const char* module, int level)
 // strdup
 void log_ex(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
 {
-	if(g_log.cur_file<=0)
+	if(g_log.cur_file<=0 || g_log.notify_close)
 		return;
 
 	if(!log_this_module(module, level))
@@ -245,36 +353,46 @@ void log_ex(int level, const char* module, const char* func, unsigned int line, 
 	vsnprintf(str+strlen(str), 1024, fmt, args);
 	va_end(args);
 
-	// printf("%s", str);
-	uv_fs_t* req = malloc_req();
-    uv_buf_t uv_buf[1] = {0};
-    uv_buf[0].base = str;
-    uv_buf[0].len = strlen(str);
-    uv_fs_write(get_loop(), req, g_log.cur_file, uv_buf, 1, -1, write_callback);
+	if(g_log.type==LOG_TYPE_NET)
+	{
+		return;
+	}
 
-    uint64_t filesize = 0;
-    struct stat statbuff;
-    if(fstat(g_log.cur_file, &statbuff)>=0)
-    {
-    	filesize = statbuff.st_size;
-    }
-    if(filesize > g_log.max_size)
-    {
-    	char new_log_tmp_name[1024] = {0};
-    	join_path(g_log.path, "tmp.log", new_log_tmp_name);
-    	uv_file old_file = g_log.cur_file;
-    	g_log.cur_file = open(new_log_tmp_name, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
-    	close(g_log.cur_file);
-    	rename_logs();
-    	char new_log_name[1024] = {0};
-    	join_path(g_log.path, g_log.name, new_log_name);
-    	rename(new_log_tmp_name, new_log_name);
-    }
+	char* dup_buf = strdup(str);
+	struct log_buf_struct* new_buf_struct = (struct log_buf_struct*)malloc(sizeof(struct log_buf_struct));
+	new_buf_struct->buf = dup_buf;
+	new_buf_struct->next = NULL; 
+	
+	int need_flush = 0;
+	uv_mutex_lock(&g_log.lock);
+
+	if(g_log.head==NULL)
+	{
+		g_log.head = new_buf_struct;
+	}
+	else
+	{
+		g_log.tail->next = new_buf_struct;
+	}
+	g_log.tail = new_buf_struct;
+	if(!g_log.flushing)
+	{
+		g_log.flushing = 1;	
+		need_flush = 1;
+	}
+	// ++g_log.wait_log_num;
+
+	uv_mutex_unlock(&g_log.lock);
+	if(need_flush)
+		flush_log();
+	// printf("%s", str);
+	return;
 }
 
 void log_uninit()
 {
-	LOG_DEBUG("");
-	close(g_log.cur_file);
-	g_log.cur_file = 0;
+	_LOG_DEBUG("");
+	g_log.notify_close = 1;
+	// close(g_log.cur_file);
+	// g_log.cur_file = 0;
 }

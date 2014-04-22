@@ -25,13 +25,18 @@ void wait_for_a_while(uv_idle_t* handle, int status)
         dnsparse("www.baidu.com");
         // start_test_fs(get_loop());
     }
-    if(counter == 5)
+    if(counter == 500)
     {
         uv_idle_stop(handle);
         LOG_DEBUG("uv_idle_stop");
+        printf("uv_idle_stop\n");
     }
-    sleep(1);
-    LOG_DEBUG("wait_for_a_while %llu, tid: %d", counter, gettid());
+    if(counter==200)
+        printf("200\n");
+    // sleep(1);
+    int i;
+    for(i=0; i< counter; ++i)
+        LOG_DEBUG("wait_for_a_while %d, %llu, tid: %d", i, counter, gettid());
 }
 
 void* test_thread(void * arg)
