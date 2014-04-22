@@ -209,14 +209,14 @@ void log_init(char* cfg_path)
 	}
 	else
 	{
-		uv_tcp_t socket;
-		uv_tcp_init(get_loop(), &socket);
+		// uv_tcp_t socket;
+		// uv_tcp_init(get_loop(), &socket);
 
-		uv_connect_t connect;
+		// uv_connect_t connect;
 
-		struct sockaddr_in dest = uv_ip4_addr("127.0.0.1", 80);
+		// struct sockaddr_in dest = uv_ip4_addr("127.0.0.1", 80);
 
-		uv_tcp_connect(&connect, &socket, dest, on_connect);
+		// uv_tcp_connect(&connect, &socket, dest, on_connect);
 	}
 
 	uv_mutex_init(&g_log.lock);
