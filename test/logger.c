@@ -36,7 +36,7 @@ struct log_struct
 	unsigned int max_num;
 	unsigned int max_size;
 	unsigned int cur_num;
-	uv_file	cur_file;
+	int	cur_file;
 
 	int default_level;
 	int module_num;
@@ -50,6 +50,12 @@ struct log_struct
 	// uint64_t wait_log_num;
 	int flushing;
 	int notify_close;
+	uv_timer_t time_req;
+
+	uv_tcp_t socked;
+	uv_connect_t connect;
+
+	uv_pipe_t pipe;
 };
 
 static struct log_struct g_log;
@@ -99,19 +105,16 @@ static void rename_logs()
 	}
 }
 
-static uv_fs_t* malloc_req()
+static void on_log_server_connect(uv_connect_t* req, int status)
 {
-    return malloc(sizeof(uv_fs_t));
+	req->data = (void*)1;
 }
 
-static free_req(uv_fs_t* req)
-{
-    free(req);
-}
+static void flush_log();
 
-void on_connect(uv_connect_t* req, int status)
+static void logger_timer_handler(uv_timer_t* handle, int status)
 {
-	_LOG_DEBUG("");
+	flush_log();
 }
 
 void log_init(char* cfg_path)
@@ -199,27 +202,30 @@ void log_init(char* cfg_path)
 		}
 		fclose(fp);
 	}
+	// g_log.type = LOG_TYPE_LOCAL;
 	if(g_log.type == LOG_TYPE_LOCAL)
 	{	
+		// g_log.max_size = 512*1024;
 		rename_logs();
 		char path[1024] = {0};
 		join_path(g_log.path, g_log.name, path);
 		g_log.cur_file = open(path, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
-		LOG_DEBUG("");
 	}
 	else
 	{
-		// uv_tcp_t socket;
-		// uv_tcp_init(get_loop(), &socket);
+		uv_tcp_init(get_loop(), &g_log.socked);
 
-		// uv_connect_t connect;
-
-		// struct sockaddr_in dest = uv_ip4_addr("127.0.0.1", 80);
-
-		// uv_tcp_connect(&connect, &socket, dest, on_connect);
+		struct sockaddr_in dest;
+		uv_ip4_addr(g_log.ip, g_log.port, &dest);
+		uv_tcp_connect(&g_log.connect, &g_log.socked, (struct sockaddr*)&dest, on_log_server_connect);
 	}
 
 	uv_mutex_init(&g_log.lock);
+
+	uv_pipe_init(get_loop(), &g_log.pipe, 0);
+
+	uv_timer_init(get_loop(), &g_log.time_req);
+	uv_timer_start(&g_log.time_req, logger_timer_handler, 200, 1000);
 }
 
 void log_uninit_ex()
@@ -232,19 +238,30 @@ void log_uninit_ex()
 		free(g_log.modules[i]);
 	}
 	uv_mutex_destroy(&g_log.lock);
+	uv_timer_stop(&g_log.time_req);
+	uv_close((uv_handle_t*)&g_log.pipe, NULL);
+
+	_LOG_DEBUG("");
+	memset(&g_log, 0, sizeof(struct log_struct));
 }
 
-static void write_callback(uv_fs_t* req);
+static void file_write_callback(uv_fs_t* req);
+
+static void socked_write_callback(uv_write_t* req, int status);
 
 static void flush_log()
 {
-	uv_fs_t* req = malloc_req();
+	// _LOG_DEBUG("flushing:%d", g_log.flushing);
+	if(g_log.flushing)
+		return;
+
     uv_buf_t uv_buf[1024] = {0};
     int index = 0;
 	struct log_buf_struct* tmp;
 	
 	uv_mutex_lock(&g_log.lock);
-	req->data = g_log.head;
+	struct log_buf_struct* head =g_log.head;
+	// req->data = g_log.head;
     while(g_log.head!=NULL && index < 1024)
     {
     	uv_buf[index].base = g_log.head->buf;
@@ -262,20 +279,47 @@ static void flush_log()
 		g_log.flushing = 0;
 	uv_mutex_unlock(&g_log.lock);
 
+	// _LOG_DEBUG("%d, %d", index, g_log.notify_close);
 	if(index)
 	{
 		tmp->next = NULL;
-	    uv_fs_write(get_loop(), req, g_log.cur_file, uv_buf, index, -1, write_callback);
+
+		if(g_log.type==LOG_TYPE_LOCAL)
+		{
+			uv_fs_t* req = (uv_fs_t*)malloc(sizeof(uv_fs_t));
+			req->data = head;
+		    uv_fs_write(get_loop(), req, g_log.cur_file, uv_buf, index, -1, file_write_callback);
+		}
+		else if(g_log.type==LOG_TYPE_NET)
+		{
+			uv_write_t* req = (uv_write_t*)malloc(sizeof(uv_write_t));
+			req->data = head;
+			uv_write(req, (uv_stream_t*)&g_log.socked, uv_buf, index, socked_write_callback);
+		}
 	}
 	else
 	{
-		free_req(req);
 		if(g_log.notify_close)
 			log_uninit_ex();
 	}
 }
 
-static void write_callback(uv_fs_t* req)
+static void socked_write_callback(uv_write_t* req, int status)
+{
+    struct log_buf_struct* tmp = (struct log_buf_struct*)req->data;
+    struct log_buf_struct* pre = tmp;
+    while(tmp!=NULL)
+    {
+    	free(tmp->buf);
+    	pre = tmp;
+    	tmp = tmp->next;
+    	free(pre);
+    }
+    free(req);
+    g_log.flushing = 0;
+}
+
+static void file_write_callback(uv_fs_t* req)
 {
     uv_fs_req_cleanup(req);
 
@@ -288,7 +332,7 @@ static void write_callback(uv_fs_t* req)
     	tmp = tmp->next;
     	free(pre);
     }
-    free_req(req);
+    free(req);
 
     uint64_t filesize = 0;
     struct stat statbuff;
@@ -305,7 +349,8 @@ static void write_callback(uv_fs_t* req)
     	join_path(g_log.path, g_log.name, new_log_name);
     	g_log.cur_file = open(new_log_name, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
     }
-    flush_log();
+    g_log.flushing = 0;
+    // flush_log();
 }
 
 static int log_this_module(const char* module, int level)
@@ -327,9 +372,49 @@ static int log_this_module(const char* module, int level)
 	return 0;
 }
 // strdup
+
+void log_ex_2(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
+{
+	if(g_log.notify_close)
+		return;
+	if(g_log.type==LOG_TYPE_LOCAL && g_log.cur_file<=0)
+		return;
+	if(g_log.type==LOG_TYPE_NET && g_log.connect.data==NULL)
+		return;
+
+	if(!log_this_module(module, level))
+		return;
+
+	char str[1024] = {0};
+
+	struct tm local_time;
+	struct timeval now;
+
+	gettimeofday(&now, NULL);
+	localtime_r(&now.tv_sec, &local_time);
+
+	snprintf(str, 1024, "%04d-%02d-%02d %02d:%02d:%02d:%03ld [%s][%s][%d][%s:%d]",
+		local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
+		local_time.tm_hour, local_time.tm_min, local_time.tm_sec, now.tv_usec / 1000,
+		LEVEL_BUF(level),module,gettid(),func,line);
+
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(str+strlen(str), 1024, fmt, args);
+	va_end(args);
+	
+	uv_mutex_lock(&g_log.lock);
+
+	uv_mutex_unlock(&g_log.lock);
+}
+
 void log_ex(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
 {
-	if(g_log.cur_file<=0 || g_log.notify_close)
+	if(g_log.notify_close)
+		return;
+	if(g_log.type==LOG_TYPE_LOCAL && g_log.cur_file<=0)
+		return;
+	if(g_log.type==LOG_TYPE_NET && g_log.connect.data==NULL)
 		return;
 
 	if(!log_this_module(module, level))
@@ -353,17 +438,13 @@ void log_ex(int level, const char* module, const char* func, unsigned int line, 
 	vsnprintf(str+strlen(str), 1024, fmt, args);
 	va_end(args);
 
-	if(g_log.type==LOG_TYPE_NET)
-	{
-		return;
-	}
+	printf("%s", str);
 
 	char* dup_buf = strdup(str);
 	struct log_buf_struct* new_buf_struct = (struct log_buf_struct*)malloc(sizeof(struct log_buf_struct));
 	new_buf_struct->buf = dup_buf;
 	new_buf_struct->next = NULL; 
 	
-	int need_flush = 0;
 	uv_mutex_lock(&g_log.lock);
 
 	if(g_log.head==NULL)
@@ -375,17 +456,8 @@ void log_ex(int level, const char* module, const char* func, unsigned int line, 
 		g_log.tail->next = new_buf_struct;
 	}
 	g_log.tail = new_buf_struct;
-	if(!g_log.flushing)
-	{
-		g_log.flushing = 1;	
-		need_flush = 1;
-	}
-	// ++g_log.wait_log_num;
 
 	uv_mutex_unlock(&g_log.lock);
-	if(need_flush)
-		flush_log();
-	// printf("%s", str);
 	return;
 }
 
