@@ -11,6 +11,16 @@
 #define LEVEL_BUF_0_ "debug"
 #define LEVEL_BUF_1_ "error"
 
+char* ppp[]=
+{
+  "",
+#define XX(uc, lc) lc,
+  UV_ERRNO_MAP_(XX)
+#undef XX
+  "UV_HANDLE_TYPE_MAX"
+} ;
+
+
 static const char* g_level[] = {"debug","error"};
 
 
@@ -107,6 +117,7 @@ static void rename_logs()
 
 static void on_log_server_connect(uv_connect_t* req, int status)
 {
+	_LOG_DEBUG("status:%d", status);
 	req->data = (void*)1;
 }
 
@@ -217,7 +228,19 @@ void log_init(char* cfg_path)
 
 		struct sockaddr_in dest;
 		uv_ip4_addr(g_log.ip, g_log.port, &dest);
+		// uv_ip4_addr("220.181.111.85", 80, &dest);
+
 		uv_tcp_connect(&g_log.connect, &g_log.socked, (struct sockaddr*)&dest, on_log_server_connect);
+
+
+		// uv_tcp_t* tmp_sock = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
+		// uv_connect_t* tmp_cn = (uv_connect_t*)malloc(sizeof(uv_connect_t));
+		// uv_tcp_init(get_loop(), tmp_sock);
+		// struct sockaddr_in tmpdest;
+		// // uv_ip4_addr("220.181.111.85", 80, &tmpdest);
+		// uv_ip4_addr(g_log.ip, g_log.port, &tmpdest);
+		// uv_tcp_connect(tmp_cn, tmp_sock, (struct sockaddr*)&tmpdest, on_log_server_connect);
+
 	}
 
 	uv_mutex_init(&g_log.lock);
@@ -410,15 +433,15 @@ void log_ex_2(int level, const char* module, const char* func, unsigned int line
 
 void log_ex(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
 {
-	if(g_log.notify_close)
-		return;
-	if(g_log.type==LOG_TYPE_LOCAL && g_log.cur_file<=0)
-		return;
-	if(g_log.type==LOG_TYPE_NET && g_log.connect.data==NULL)
-		return;
+	// if(g_log.notify_close)
+	// 	return;
+	// if(g_log.type==LOG_TYPE_LOCAL && g_log.cur_file<=0)
+	// 	return;
+	// if(g_log.type==LOG_TYPE_NET && g_log.connect.data==NULL)
+	// 	return;
 
-	if(!log_this_module(module, level))
-		return;
+	// if(!log_this_module(module, level))
+	// 	return;
 
 	char str[1024] = {0};
 

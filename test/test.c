@@ -10,7 +10,7 @@
 
 // #include "test_fs.h"
 
-#define LOG_MODULE "async_frame"
+#define LOG_MODULE ASYNC_FRAME
 #include "logger.h"
 
 int64_t counter = 0;
@@ -53,20 +53,50 @@ void* test_thread(void * arg)
 
 uv_timer_t time_req;
 
+static void on_co(uv_connect_t* req, int status)
+{
+    // STD_LOG_DEBUG(" status:%d", status);
+    printf("status:%d\n", status);
+    // req->data = (void*)1;
+}
+
 void timer_handler(uv_timer_t* handle, int status)
 {
     LOG_DEBUG("%llu", counter);
     counter++;
+
+    // if(counter < 20)
+    // {
+    //     uv_tcp_t* tmp_sock = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
+    //     uv_connect_t* tmp_cn = (uv_connect_t*)malloc(sizeof(uv_connect_t));
+    //     uv_tcp_init(get_loop(), tmp_sock);
+    //     struct sockaddr_in tmpdest;
+    //     uv_ip4_addr("192.168.1.5", 6211, &tmpdest);
+    //     // uv_ip4_addr(g_log.ip, g_log.port, &tmpdest);
+    //     uv_tcp_connect(tmp_cn, tmp_sock, (struct sockaddr*)&tmpdest, on_co);
+    // }
+
     if(counter==30)
     {   
+        printf("x\n");
         uv_timer_stop(&time_req);
         log_uninit();
         uv_stop(get_loop());
     }
 }
 
+int test()
+{
+    int fd = open("/sdcard/test.txt", O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
+    printf("%d\n", fd);
+    pwrite(fd, "1234", 4, 0);
+    pwrite(fd, "9876ddddddxxxxxxxxxxd\n", 10, 100);
+    close(fd);
+}
+
 int main()
 {
+    // return test();
 	// uv_idle_t idler;
 
  //    uv_idle_init(get_loop(), &idler);
