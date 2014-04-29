@@ -11,13 +11,14 @@ LOCAL_SRC_FILES += \
   http.c \
   async_frame.c \
   dns.c \
+  logger.c \
   test.c
 
 LOCAL_CFLAGS  += -MD -O2 -Wno-psabi 
 
 LOCAL_STATIC_LIBRARIES += libuv
 
-#LOCAL_LDLIBS  += -lz -llog
+LOCAL_LDLIBS  += -llog
 
 
 include $(BUILD_EXECUTABLE)
