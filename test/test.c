@@ -10,7 +10,7 @@
 
 // #include "test_fs.h"
 
-#define LOG_MODULE ASYNC_FRAME
+#define LOG_MODULE LOG_ASYNC_FRAME
 #include "logger.h"
 
 int64_t counter = 0;
@@ -63,6 +63,7 @@ static void on_co(uv_connect_t* req, int status)
 void timer_handler(uv_timer_t* handle, int status)
 {
     LOG_DEBUG("%llu", counter);
+    LOG_ERROR("%llu", counter);
     counter++;
 
     // if(counter < 20)
@@ -78,7 +79,7 @@ void timer_handler(uv_timer_t* handle, int status)
 
     if(counter==30)
     {   
-        printf("x\n");
+        // printf("x\n");
         uv_timer_stop(&time_req);
         log_uninit();
         uv_stop(get_loop());

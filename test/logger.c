@@ -8,27 +8,6 @@
 #define _LOG_DEBUG(format, ...) printf("[%d:%s:%d] " format "\n", gettid(),__FUNCTION__, __LINE__,##__VA_ARGS__)
 #define _LOG_ERROR(format, ...) printf("[%d:%s:%d] " format "\n", gettid(),__FUNCTION__, __LINE__,##__VA_ARGS__)
 
-#define LEVEL_BUF_0_ "debug"
-#define LEVEL_BUF_1_ "error"
-
-char* ppp[]=
-{
-  "",
-#define XX(uc, lc) lc,
-  UV_ERRNO_MAP_(XX)
-#undef XX
-  "UV_HANDLE_TYPE_MAX"
-} ;
-
-
-static const char* g_level[] = {"debug","error"};
-
-
-// #define LEVEL_BUF(level) LEVEL_BUF_##level##_	
-#define LEVEL_BUF(level) g_level[level]
-
-#define MAX_MODULE_NUM 512
-
 struct log_buf_struct
 {
 	struct log_buf_struct* next;
@@ -49,15 +28,12 @@ struct log_struct
 	int	cur_file;
 
 	int default_level;
-	int module_num;
-	char* modules[MAX_MODULE_NUM];
-	int levels[MAX_MODULE_NUM];
+	int levels[LOG_MODULE_COUNT];
 
 
 	struct log_buf_struct* head;
 	struct log_buf_struct* tail;
 	uv_mutex_t lock;
-	// uint64_t wait_log_num;
 	int flushing;
 	int notify_close;
 	uv_timer_t time_req;
@@ -128,8 +104,51 @@ static void logger_timer_handler(uv_timer_t* handle, int status)
 	flush_log();
 }
 
+
+#define LOG_MODULE_NAME_GEN(name, msg) case LOG_ ## name: return msg;
+const char* log_module_name(int module) 
+{
+  switch (module) {
+    LOGID_MAP(LOG_MODULE_NAME_GEN)
+    default:
+      return NULL;
+  }
+}
+#undef LOG_MODULE_NAME_GEN
+
+#define LOG_LEVEL_NAME_GEN(name, msg) case LOG_ ## name: return msg;
+const char* log_level_name(int module) 
+{
+  switch (module) {
+    LOG_LEVEL_MAP(LOG_LEVEL_NAME_GEN)
+    default:
+      return NULL;
+  }
+}
+#undef LOG_LEVEL_NAME_GEN
+
+
+static void set_module_level(const char* module, int level)
+{
+	int i;
+	for(i=0;i<LOG_MODULE_COUNT;++i)
+	{
+		if(strcmp(module, log_module_name(i))==0)
+		{
+			g_log.levels[i] = level;
+			break;
+		}
+	}
+}
+
 void log_init(char* cfg_path)
 {
+	g_log.default_level = LOG_LEVEL_OFF;
+	int i;
+	for(i=0; i<LOG_MODULE_COUNT; ++i)
+	{
+		g_log.levels[i] = LOG_LEVEL_OFF;
+	}
 	if(cfg_path && access(cfg_path, F_OK)!=-1)
 	{
 		char buf[1024] = {0};
@@ -152,11 +171,9 @@ void log_init(char* cfg_path)
 					if(strcmp(detail, "level")==0)
 					{
 						if(strcmp(value, "debug")==0)
-							g_log.default_level = LEVEL_DEBUG;
+							g_log.default_level = LOG_LEVEL_DEBUG;
 						else if(strcmp(value, "error")==0)
-							g_log.default_level = LEVEL_ERROR;
-						else
-							g_log.default_level = 100;
+							g_log.default_level = LOG_LEVEL_ERROR;
 					}
 					else if(strcmp(detail, "type")==0)
 					{
@@ -198,15 +215,12 @@ void log_init(char* cfg_path)
 					tmp_module[strlen(detail)]='\0';
 					if(strcmp(value, "debug")==0)
 					{
-						g_log.modules[g_log.module_num] = tmp_module;
-						g_log.levels[g_log.module_num] = LEVEL_DEBUG;
+						set_module_level(tmp_module, LOG_LEVEL_DEBUG);
 					}
 					else if(strcmp(value, "error")==0)
 					{
-						g_log.modules[g_log.module_num] = tmp_module;
-						g_log.levels[g_log.module_num] = LEVEL_ERROR;
+						set_module_level(tmp_module, LOG_LEVEL_ERROR);
 					}
-					++g_log.module_num;
 				}
 			}
 			memset(buf, 0, 1024);
@@ -228,19 +242,8 @@ void log_init(char* cfg_path)
 
 		struct sockaddr_in dest;
 		uv_ip4_addr(g_log.ip, g_log.port, &dest);
-		// uv_ip4_addr("220.181.111.85", 80, &dest);
 
 		uv_tcp_connect(&g_log.connect, &g_log.socked, (struct sockaddr*)&dest, on_log_server_connect);
-
-
-		// uv_tcp_t* tmp_sock = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
-		// uv_connect_t* tmp_cn = (uv_connect_t*)malloc(sizeof(uv_connect_t));
-		// uv_tcp_init(get_loop(), tmp_sock);
-		// struct sockaddr_in tmpdest;
-		// // uv_ip4_addr("220.181.111.85", 80, &tmpdest);
-		// uv_ip4_addr(g_log.ip, g_log.port, &tmpdest);
-		// uv_tcp_connect(tmp_cn, tmp_sock, (struct sockaddr*)&tmpdest, on_log_server_connect);
-
 	}
 
 	uv_mutex_init(&g_log.lock);
@@ -254,12 +257,6 @@ void log_init(char* cfg_path)
 void log_uninit_ex()
 {
 	close(g_log.cur_file);
-
-	int i;
-	for(i=0; i<g_log.module_num; ++i)
-	{
-		free(g_log.modules[i]);
-	}
 	uv_mutex_destroy(&g_log.lock);
 	uv_timer_stop(&g_log.time_req);
 	uv_close((uv_handle_t*)&g_log.pipe, NULL);
@@ -274,7 +271,6 @@ static void socked_write_callback(uv_write_t* req, int status);
 
 static void flush_log()
 {
-	// _LOG_DEBUG("flushing:%d", g_log.flushing);
 	if(g_log.flushing)
 		return;
 
@@ -373,30 +369,14 @@ static void file_write_callback(uv_fs_t* req)
     	g_log.cur_file = open(new_log_name, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
     }
     g_log.flushing = 0;
-    // flush_log();
 }
 
-static int log_this_module(const char* module, int level)
+static int log_this_module(int module, int level)
 {
-	if(g_log.default_level<=level)
-		return 1;
-
-	int i;
-	for(i=0; i<g_log.module_num; ++i)
-	{
-		if(strcmp(g_log.modules[i], module)==0)
-		{
-			if(g_log.levels[i] <= level)
-				return 1;
-			else
-				return 0;
-		}
-	}
-	return 0;
+	return g_log.default_level<=level || g_log.levels[module] <= level;
 }
-// strdup
 
-void log_ex_2(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
+void log_ex(int level, int module, const char* func, unsigned int line, const char* fmt, ...)
 {
 	if(g_log.notify_close)
 		return;
@@ -419,42 +399,7 @@ void log_ex_2(int level, const char* module, const char* func, unsigned int line
 	snprintf(str, 1024, "%04d-%02d-%02d %02d:%02d:%02d:%03ld [%s][%s][%d][%s:%d]",
 		local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
 		local_time.tm_hour, local_time.tm_min, local_time.tm_sec, now.tv_usec / 1000,
-		LEVEL_BUF(level),module,gettid(),func,line);
-
-	va_list args;
-	va_start(args, fmt);
-	vsnprintf(str+strlen(str), 1024, fmt, args);
-	va_end(args);
-	
-	uv_mutex_lock(&g_log.lock);
-
-	uv_mutex_unlock(&g_log.lock);
-}
-
-void log_ex(int level, const char* module, const char* func, unsigned int line, const char* fmt, ...)
-{
-	// if(g_log.notify_close)
-	// 	return;
-	// if(g_log.type==LOG_TYPE_LOCAL && g_log.cur_file<=0)
-	// 	return;
-	// if(g_log.type==LOG_TYPE_NET && g_log.connect.data==NULL)
-	// 	return;
-
-	// if(!log_this_module(module, level))
-	// 	return;
-
-	char str[1024] = {0};
-
-	struct tm local_time;
-	struct timeval now;
-
-	gettimeofday(&now, NULL);
-	localtime_r(&now.tv_sec, &local_time);
-
-	snprintf(str, 1024, "%04d-%02d-%02d %02d:%02d:%02d:%03ld [%s][%s][%d][%s:%d]",
-		local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
-		local_time.tm_hour, local_time.tm_min, local_time.tm_sec, now.tv_usec / 1000,
-		LEVEL_BUF(level),module,gettid(),func,line);
+		log_level_name(level),log_module_name(module),gettid(),func,line);
 
 	va_list args;
 	va_start(args, fmt);
@@ -488,6 +433,4 @@ void log_uninit()
 {
 	_LOG_DEBUG("");
 	g_log.notify_close = 1;
-	// close(g_log.cur_file);
-	// g_log.cur_file = 0;
 }
