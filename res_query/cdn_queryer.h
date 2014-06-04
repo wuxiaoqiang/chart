@@ -8,10 +8,10 @@ void query_cdn_alloc_buf(uv_handle_t* handle,
 void query_cdn_recv_cb(uv_stream_t* stream,
                            ssize_t nread,
                            const uv_buf_t* buf);
+void query_cdn_connect_cb(uv_connect_t* req, int status);
+
 
 void query_cdn_send_cb(uv_write_t* req, int status);
-
-void query_cdn_connect_cb(uv_connect_t* req, int status);
 
 void query_cdn_parse_dns_cb(uv_getaddrinfo_t *resolver, int status, struct addrinfo *res);
 
