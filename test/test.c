@@ -26,6 +26,7 @@ void wait_for_a_while(uv_idle_t* handle, int status)
 
 int main()
 {
+    test_http_request();
 	uv_idle_t idler;
 
     uv_idle_init(get_loop(), &idler);
