@@ -6,12 +6,19 @@
 
 // socket
 
+typedef void (* AA) (unsigned ip, unsigned short port, void *user_data);
+typedef void (* BB) (uv_stream_t *, int, void *user_data);
+
 
 void parse_dns_cb(unsigned ip, unsigned short port, void *user_data);
 
 int parse_dns(char *host, unsigned short port, void *cb, void *user_data);
 
 void parse_dns_cb_(uv_getaddrinfo_t *resolver, int status, struct addrinfo *res);
+
+int connect_by_ip(unsigned ip, unsigned short port, AA cb, void *user_data);
+
+ void connect_cb_(uv_connect_t* req, int status);
 
 
 int connect_by_domain(char *host, unsigned short port, void *cb, void *user_data)
@@ -31,7 +38,9 @@ void parse_dns_cb(unsigned ip, unsigned short port, void *user_data)
     void * cb_t = ud_t[0];
     void * user_data_t = ud_t[1];
 
-    connect_by_ip(ip, port, cb_t, (void*)user_data_t);
+    LOG_DEBUG("");
+
+    connect_by_ip(ip, port, (AA)cb_t, (void*)user_data_t);
 
 }
 
@@ -75,14 +84,15 @@ void parse_dns_cb_(uv_getaddrinfo_t *resolver, int status, struct addrinfo *res)
 
         uv_freeaddrinfo(res);
 
-        cb_t(ip, port, user_data_t);
+        ((AA)cb_t)(ip, ntohs(port), user_data_t);
 
     }
 }
 
 
-int connect_by_ip(unsigned ip, unsigned short port, void *cb, void *user_data)
+int connect_by_ip(unsigned ip, unsigned short port, AA cb, void *user_data)
 {
+    LOG_DEBUG("ip: %d, port: %d", ip, port);
     uv_connect_t *req = malloc(sizeof(uv_connect_t));
 
         struct sockaddr_in dest_addr;
@@ -91,24 +101,30 @@ int connect_by_ip(unsigned ip, unsigned short port, void *cb, void *user_data)
         dest_addr.sin_port = htons(port);
         dest_addr.sin_addr.s_addr = ip;
 
-void *ud_t = malloc(sizeof(void *)*2);
+void **ud_t = malloc(sizeof(void *)*2);
 
-    ud_t[0] = cb;
+    ud_t[0] = (void *)cb;
     ud_t[1] = user_data;
 
     req->data = ud_t;
 
-        int ret = uv_tcp_connect(req, g_query_cdn_socket, (struct sockaddr *)&dest_addr, connect_cb_);
+uv_tcp_t *sock = malloc(sizeof(uv_tcp_t));
+        uv_tcp_init(get_loop(), sock);
+
+
+        int ret = uv_tcp_connect(req, sock, (struct sockaddr *)&dest_addr, connect_cb_);
+    LOG_DEBUG("ret: %d", ret);
 }
 
  void connect_cb_(uv_connect_t* req, int status)
  {
-       void *ud_t = resolver->data;
+    LOG_DEBUG("");
+       void **ud_t = req->data;
 
     void * cb_t = ud_t[0];
     void * user_data_t = ud_t[1];
 
-        cb_t(req->uv_stream_t, status, user_data_t);
+        ((BB)cb_t)(req->handle, status, user_data_t);
  }
 
 
@@ -135,7 +151,7 @@ int http_session_connect( HttpSession* handle, const char* host, unsigned short 
     ;
 }
 
-int http_session_request( HttpSession* handle, char* request_buf, _u32 request_len );
+int http_session_request( HttpSession* handle, char* request_buf, int request_len );
 
 int http_session_close( HttpSession* handle );
 
