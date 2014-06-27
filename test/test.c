@@ -14,25 +14,28 @@ int64_t counter = 0;
 
 void wait_for_a_while(uv_idle_t* handle, int status)
 {
-    counter++;
+     counter++;
 
-    if (counter == 1)
-    {        ;//uv_idle_stop(handle);
-        dnsparse("www.baidu.com");
-    }
-    sleep(2);
-    printf("wait_for_a_while tid: %d\n", gettid());
+    // if (counter == 1)
+    // {        ;//uv_idle_stop(handle);
+    //     dnsparse("www.baidu.com");
+    // }
+    sleep(1);
+    if (counter%30==0)printf("wait_for_a_while tid: %d, run time: %lld s\n", gettid(), counter);
 }
 
 int main()
 {
-	uv_idle_t idler;
+    // test_http_request();
+    test_socket();
 
+
+
+	uv_idle_t idler;
     uv_idle_init(get_loop(), &idler);
     uv_idle_start(&idler, wait_for_a_while);
 
-
-    printf("Now quitting.\n");
+    printf("Now running.\n");
     uv_run(get_loop(), UV_RUN_DEFAULT);
 
     return 0;
