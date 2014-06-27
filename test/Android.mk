@@ -14,7 +14,7 @@ LOCAL_SRC_FILES += \
 
 LOCAL_CFLAGS  += -MD -O2 -Wno-psabi 
 
-LOCAL_STATIC_LIBRARIES += libuv http_request
+LOCAL_STATIC_LIBRARIES += libuv http_request wwl_socket
 
 #LOCAL_LDLIBS  += -lz -llog
 

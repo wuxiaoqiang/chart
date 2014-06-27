@@ -1,69 +1,114 @@
 #include "wwl_socket.h"
 #include "wwl_socket_cb_handle.h"
 
-#include "uv.h"
+#include "../log/log.h"
+#include "../test/async_frame.h"
 
-typedef void (*wwl_accept_cb)(int sockfd, int acceptfd, struct sockaddr_in *addr, int result, void *user_data);
-typedef void (*wwl_connect_cb)(int sockfd, int result, void *user_data);
-
-typedef void (*www_send_cb)(int sockfd, const void *buf, size_t send_len, int result, void *user_data);
-typedef void (*www_recv_cb)(int sockfd, const void *buf, size_t recv_len, int result, void *user_data);
-
-
-
-uv_loop_t *get_loop() {return 0;}
-
-
-
-
-int wwl_socket(int domain, int type, int protocol)
+int wwl_parse_dns(char *host, unsigned short port, PARSE_CB cb, void *user_data)
 {
-    uv_tcp_t *fd = malloc(sizeof(uv_tcp_t));
-    uv_tcp_init(get_loop(), fd);
-    return (int)fd;
+    uv_getaddrinfo_t *resolver = malloc(sizeof(uv_getaddrinfo_t));
+
+    void **ud_t = malloc(sizeof(void *)*2);
+
+    ud_t[0] = cb;
+    ud_t[1] = user_data;
+
+    resolver->data = (void*)ud_t;
+
+    char port_str[10];
+
+    sprintf(port_str, "%d", port);
+
+    int r = uv_getaddrinfo(get_loop(), resolver, parse_dns_cb, host, port_str, NULL);
+    return r;
 }
 
-
-// int wwl_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-int wwl_bind(int sockfd, const struct sockaddr_in *addr)
+int wwl_connect_by_domain(char *host, unsigned short port, CONN_CB cb, void *user_data)
 {
-    return uv_tcp_bind((uv_tcp_t *)sockfd, (struct sockaddr*) addr, 0);
+    void **ud_t = malloc(sizeof(void *)*2);
+
+    ud_t[0] = cb;
+    ud_t[1] = user_data;
+
+    wwl_parse_dns(host,port, connect_by_domain_cb, (void*)ud_t);
 }
 
-int wwl_listen(int sockfd, int backlog)
+int wwl_connect_by_ip(unsigned ip, unsigned short port, CONN_CB cb, void *user_data)
 {
-    uv_stream_t * stream = malloc(sizeof(uv_stream_t));
-    uv_listen(stream, backlog, uv_connection_cb cb);
+    LOG_DEBUG("ip: %d, port: %d", ip, port);
+    uv_connect_t *req = malloc(sizeof(uv_connect_t));
+
+    struct sockaddr_in dest_addr;
+
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
+    dest_addr.sin_addr.s_addr = ip;
+
+    void **ud_t = malloc(sizeof(void *)*2);
+
+    ud_t[0] = cb;
+    ud_t[1] = user_data;
+
+    req->data = ud_t;
+
+    uv_tcp_t *sock = malloc(sizeof(uv_tcp_t));
+    uv_tcp_init(get_loop(), sock);
+
+
+    int ret = uv_tcp_connect(req, sock, (struct sockaddr *)&dest_addr, connect_cb);
+    LOG_DEBUG("ret: %d", ret);
 }
 
-
-// int wwl_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen, );
-int wwl_accept(int sockfd, struct sockaddr_in *addr, wwl_accept_cb cb, void *user_data);
-
-
-// int wwl_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-int wwl_connect(int sockfd, const struct sockaddr_in *addr, wwl_connect_cb cb, void *user_data)
+int wwl_send(uv_stream_t * handle, char *buff, int len, SEND_CB cb, void *user_data)
 {
-    uv_connect_t *connect = malloc(sizeof(uv_connect_t) + sizeof(wwl_connect_cb) + sizeof(user_data));
+    LOG_DEBUG("buff: %p, len: %d", buff, len);
 
-    uv_tcp_connect(connect, (uv_tcp_t *)sockfd, (struct sockaddr *)addr, wwl_on_connect);
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    uv_buf_t buf = uv_buf_init(buff, len);
+
+    void **ud_t = malloc(sizeof(void *)*2);
+
+    ud_t[0] = (void *)cb;
+    ud_t[1] = user_data;
+
+    req->data = ud_t;
+
+    uv_write(req, handle, &buf, 1, send_cb);
 }
 
+int wwl_recv(uv_stream_t * handle, char *buff, int len, RECV_CB cb, void *user_data)
+{
+    LOG_DEBUG("buff: %p, len: %d", buff, len);
+    
+    void **ud_t = malloc(sizeof(void *)*5);
 
-// ssize_t wwl_send(int sockfd, const void *buf, size_t len, int flags);
-ssize_t wwl_send(int sockfd, const void *buf, size_t len, wwl_send_cb cb, void *user_data);
+    ud_t[0] = (void *)cb;
+    ud_t[1] = user_data;
+    ud_t[2] = buff;
+    ud_t[3] = (void *)len;
+    ud_t[4] = 0;
+    
+    handle->data = ud_t;
+    
+    uv_read_start(handle, alloc_buf_cb, recv_cb);
+}
 
-// ssize_t wwl_recv(int sockfd, void *buf, size_t len, int flags);
-ssize_t wwl_recv(int sockfd, void *buf, size_t len, wwl_recv_cb cb, void *user_data);
+int wwl_close(uv_stream_t * handle, CLOSE_CB cb, void *user_data)
+{
+    LOG_DEBUG("handle->data: %p", handle->data);
+    if (handle->data)
+    {
+        uv_read_stop(handle);
+        handle->data = 0;
+    }
 
+    void **ud_t = malloc(sizeof(void *)*2);
 
-// size_t wwl_sendto(int sockfd, const void *buf, size_t len, int flags,
-                      // const struct sockaddr *dest_addr, socklen_t addrlen);
-size_t wwl_sendto(int sockfd, const void *buf, size_t len,
-                      const struct sockaddr_in *dest_addr);
+    ud_t[0] = (void *)cb;
+    ud_t[1] = user_data;
 
-// ssize_t wwl_recvfrom(int sockfd, void *buf, size_t len, int flags,
-                      // struct sockaddr *src_addr, socklen_t *addrlen);
-ssize_t wwl_recvfrom(int sockfd, void *buf, size_t len, struct sockaddr_in *src_addr);
+    uv_shutdown_t *req = malloc(sizeof(uv_shutdown_t));
 
-
+    req->data = ud_t;
+    uv_shutdown(req, handle, close_cb);
+}
